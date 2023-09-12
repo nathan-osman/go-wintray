@@ -121,12 +121,14 @@ func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) {
 
 func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) {
 	nid := &win.NOTIFYICONDATA{
+		CbSize: uint32(unsafe.Sizeof(win.NOTIFYICONDATA{})),
 		HWnd:   hwnd,
 		UID:    iconId,
-		UFlags: win.NIF_TIP,
+		UFlags: win.NIF_TIP | win.NIF_SHOWTIP,
 	}
 	for i, v := range mustUTF16FromString(text) {
 		if i == len(nid.SzTip) {
+			nid.SzTip[i-1] = 0
 			break
 		}
 		nid.SzTip[i] = v
@@ -233,8 +235,8 @@ func (w *WinTray) run(threadIdChan chan<- uint32, hwndChan chan<- win.HWND) {
 				if fn, ok := menuFns[id]; ok {
 					fn()
 				}
+				return 0
 			}
-			return 0
 
 		// A message was sent from another thread requesting an action
 		case pWMAPP_MESSAGE:
