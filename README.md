@@ -31,7 +31,7 @@ You can add items to the context menu that is shown when the icon is right-click
 
 ```golang
 w.AddMenuItem("&Print Message", func() {
-    fmt.Println("Hello, world!")
+    fmt.Println("This is a tooltip!")
 })
 ```
 
