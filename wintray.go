@@ -1,6 +1,9 @@
 package wintray
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -14,7 +17,7 @@ const (
 	pWMAPP_NOTIFYCALLBACK = iota + win.WM_APP + 1
 	pWMAPP_MESSAGE
 
-	pMESSAGE_SET_ICON = iota
+	pMESSAGE_SET_ICON_FROM_BYTES = iota
 	pMESSAGE_SET_TIP
 	pMESSAGE_ADD_MENU_ITEM
 )
@@ -62,6 +65,8 @@ func mustUTF16PtrFromString(v string) *uint16 {
 	return p
 }
 
+// TODO: use a second channel to send error value back to caller
+
 func (w *WinTray) createTrayIcon(hwnd win.HWND, iconId uint32) {
 	win.Shell_NotifyIcon(win.NIM_ADD, &win.NOTIFYICONDATA{
 		HWnd:             hwnd,
@@ -77,6 +82,41 @@ func (w *WinTray) setVersion(hwnd win.HWND, iconId uint32) {
 		UID:      iconId,
 		UVersion: win.NOTIFYICON_VERSION_4,
 	})
+}
+
+func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) {
+
+	// Create a temporary file with the image contents
+	f, err := os.CreateTemp("", "*.ico")
+	if err != nil {
+		return
+	}
+	defer func() {
+		os.Remove(f.Name())
+	}()
+	io.Copy(f, bytes.NewReader(b))
+	f.Close()
+
+	// Now attempt to load the icon
+	h := win.LoadImage(
+		0,
+		mustUTF16PtrFromString(f.Name()),
+		win.IMAGE_ICON,
+		0,
+		0,
+		win.LR_DEFAULTSIZE|win.LR_LOADFROMFILE,
+	)
+
+	hicon := win.HICON(h)
+
+	// Set the icon
+	nid := &win.NOTIFYICONDATA{
+		HWnd:   hwnd,
+		UID:    iconId,
+		UFlags: win.NIF_ICON,
+		HIcon:  hicon,
+	}
+	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
 }
 
 func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) {
@@ -200,6 +240,8 @@ func (w *WinTray) run(threadIdChan chan<- uint32, hwndChan chan<- win.HWND) {
 		case pWMAPP_MESSAGE:
 			m := <-w.messageChan
 			switch m.Type {
+			case pMESSAGE_SET_ICON_FROM_BYTES:
+				w.setIcon(hwnd, iconId, m.Data.([]byte))
 			case pMESSAGE_SET_TIP:
 				w.setTip(hwnd, iconId, m.Data.(string))
 			case pMESSAGE_ADD_MENU_ITEM:
@@ -268,6 +310,15 @@ func New() *WinTray {
 	w.threadId = <-threadIdChan
 	w.hwnd = <-hwndChan
 	return w
+}
+
+// SetIconFromBytes reads an ICO file from a byte array.
+func (w *WinTray) SetIconFromBytes(b []byte) {
+	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
+	w.messageChan <- &pMessage{
+		Type: pMESSAGE_SET_ICON_FROM_BYTES,
+		Data: b,
+	}
 }
 
 // SetTip sets the tooltip for the icon.
