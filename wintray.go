@@ -43,7 +43,6 @@ type pDataAddMenuItem struct {
 // WinTray provides a single icon in the system tray. A separate goroutine is
 // used for running all of the API functions
 type WinTray struct {
-	threadId    uint32
 	hwnd        win.HWND
 	messageChan chan *pMessage
 	closedChan  chan any
@@ -183,7 +182,7 @@ func (w *WinTray) showMenu(hwnd win.HWND, hmenu win.HMENU, pt *win.POINT) uint32
 	)
 }
 
-func (w *WinTray) run(threadIdChan chan<- uint32, hwndChan chan<- win.HWND) {
+func (w *WinTray) run(hwndChan chan<- win.HWND) {
 
 	// Signal termination when the method ends
 	defer close(w.closedChan)
@@ -191,10 +190,6 @@ func (w *WinTray) run(threadIdChan chan<- uint32, hwndChan chan<- win.HWND) {
 	// Lock this goroutine to an OS thread until termination
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-
-	// Send the current thread ID to the host goroutine
-	threadIdChan <- win.GetCurrentThreadId()
-	close(threadIdChan)
 
 	// Generate a unique ID for this particular tray icon and create an empty
 	// context menu
@@ -305,11 +300,9 @@ func New() *WinTray {
 			messageChan: make(chan *pMessage),
 			closedChan:  make(chan any),
 		}
-		threadIdChan = make(chan uint32)
-		hwndChan     = make(chan win.HWND)
+		hwndChan = make(chan win.HWND)
 	)
-	go w.run(threadIdChan, hwndChan)
-	w.threadId = <-threadIdChan
+	go w.run(hwndChan)
 	w.hwnd = <-hwndChan
 	return w
 }
