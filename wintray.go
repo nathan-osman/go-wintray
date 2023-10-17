@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"reflect"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -20,6 +21,7 @@ const (
 	pMESSAGE_SET_ICON_FROM_BYTES = iota
 	pMESSAGE_SET_TIP
 	pMESSAGE_ADD_MENU_ITEM
+	pMESSAGE_SHOW_NOTIFICATION
 )
 
 var (
@@ -38,6 +40,11 @@ type pMessage struct {
 type pDataAddMenuItem struct {
 	Text string
 	Fn   func()
+}
+
+type pDataShowNotification struct {
+	Info      string
+	InfoTitle string
 }
 
 // WinTray provides a single icon in the system tray. A separate goroutine is
@@ -62,6 +69,20 @@ func mustUTF16PtrFromString(v string) *uint16 {
 		panic(err)
 	}
 	return p
+}
+
+func copyToUint16Buffer(buff any, text string) {
+	var (
+		tBuff = reflect.TypeOf(buff).Elem()
+		vBuff = reflect.ValueOf(buff).Elem()
+	)
+	for i, v := range mustUTF16FromString(text) {
+		if i == tBuff.Len() {
+			vBuff.Index(i - 1).Set(reflect.Zero(tBuff.Elem()))
+			break
+		}
+		vBuff.Index(i).Set(reflect.ValueOf(v))
+	}
 }
 
 // TODO: use a second channel to send error value back to caller
@@ -125,13 +146,7 @@ func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) {
 		UID:    iconId,
 		UFlags: win.NIF_TIP | win.NIF_SHOWTIP,
 	}
-	for i, v := range mustUTF16FromString(text) {
-		if i == len(nid.SzTip) {
-			nid.SzTip[i-1] = 0
-			break
-		}
-		nid.SzTip[i] = v
-	}
+	copyToUint16Buffer(&nid.SzTip, text)
 	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
 }
 
@@ -142,6 +157,18 @@ func (w *WinTray) addMenuItem(hmenu win.HMENU, id uint32, text string) {
 		uintptr(id),
 		uintptr(unsafe.Pointer(mustUTF16PtrFromString(text))),
 	)
+}
+
+func (w *WinTray) showNotification(hwnd win.HWND, iconId uint32, info, infoTitle string) {
+	nid := &win.NOTIFYICONDATA{
+		CbSize: uint32(unsafe.Sizeof(win.NOTIFYICONDATA{})),
+		HWnd:   hwnd,
+		UID:    iconId,
+		UFlags: win.NIF_INFO,
+	}
+	copyToUint16Buffer(&nid.SzInfo, info)
+	copyToUint16Buffer(&nid.SzInfoTitle, infoTitle)
+	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
 }
 
 func (w *WinTray) showMenu(hwnd win.HWND, hmenu win.HMENU, pt *win.POINT) uint32 {
@@ -248,6 +275,9 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 				)
 				menuFns[id] = d.Fn
 				w.addMenuItem(hmenu, id, d.Text)
+			case pMESSAGE_SHOW_NOTIFICATION:
+				d := m.Data.(*pDataShowNotification)
+				w.showNotification(hwnd, iconId, d.Info, d.InfoTitle)
 			}
 			return 0
 		}
@@ -334,6 +364,19 @@ func (w *WinTray) AddMenuItem(text string, fn func()) {
 		Data: &pDataAddMenuItem{
 			Text: text,
 			Fn:   fn,
+		},
+	}
+}
+
+// ShowNotification displays a balloon notification with the provided message
+// and title.
+func (w *WinTray) ShowNotification(info, infoTitle string) {
+	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
+	w.messageChan <- &pMessage{
+		Type: pMESSAGE_SHOW_NOTIFICATION,
+		Data: &pDataShowNotification{
+			Info:      info,
+			InfoTitle: infoTitle,
 		},
 	}
 }
