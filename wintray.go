@@ -255,7 +255,7 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 					},
 				)
 				if fn, ok := menuFns[id]; ok {
-					fn()
+					go fn()
 				}
 				return 0
 			}
