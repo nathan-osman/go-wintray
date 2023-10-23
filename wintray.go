@@ -24,6 +24,7 @@ const (
 	pMESSAGE_SET_ICON_FROM_BYTES = iota
 	pMESSAGE_SET_TIP
 	pMESSAGE_ADD_MENU_ITEM
+	pMESSAGE_ADD_MENU_SEPARATOR
 	pMESSAGE_SHOW_NOTIFICATION
 )
 
@@ -188,6 +189,18 @@ func (w *WinTray) addMenuItem(hmenu win.HMENU, id uint32, text string) error {
 	return nil
 }
 
+func (w *WinTray) addMenuSeparator(hmenu win.HMENU) error {
+	if ret, _, err := pAppendMenuW.Call(
+		uintptr(hmenu),
+		uintptr(win.MF_SEPARATOR),
+		0,
+		0,
+	); ret == 0 {
+		return err
+	}
+	return nil
+}
+
 func (w *WinTray) showNotification(hwnd win.HWND, iconId uint32, info, infoTitle string) error {
 	nid := &win.NOTIFYICONDATA{
 		CbSize: uint32(unsafe.Sizeof(win.NOTIFYICONDATA{})),
@@ -307,6 +320,8 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 				)
 				menuFns[id] = d.Fn
 				w.returnChan <- w.addMenuItem(hmenu, id, d.Text)
+			case pMESSAGE_ADD_MENU_SEPARATOR:
+				w.returnChan <- w.addMenuSeparator(hmenu)
 			case pMESSAGE_SHOW_NOTIFICATION:
 				d := m.Data.(*pDataShowNotification)
 				w.returnChan <- w.showNotification(hwnd, iconId, d.Info, d.InfoTitle)
@@ -400,6 +415,15 @@ func (w *WinTray) AddMenuItem(text string, fn func()) error {
 			Text: text,
 			Fn:   fn,
 		},
+	}
+	return <-w.returnChan
+}
+
+// AddMenuSeparator inserts a menu separator after the last item.
+func (w *WinTray) AddMenuSeparator() error {
+	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
+	w.messageChan <- &pMessage{
+		Type: pMESSAGE_ADD_MENU_SEPARATOR,
 	}
 	return <-w.returnChan
 }
