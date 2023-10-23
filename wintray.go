@@ -27,9 +27,8 @@ const (
 var (
 	newIconId = atomic.Uint32{}
 
-	user32          = windows.MustLoadDLL("User32.dll")
-	pAppendMenuW    = user32.MustFindProc("AppendMenuW")
-	pGetShellWindow = user32.MustFindProc("GetShellWindow")
+	user32       = windows.MustLoadDLL("User32.dll")
+	pAppendMenuW = user32.MustFindProc("AppendMenuW")
 )
 
 type pMessage struct {
@@ -183,20 +182,7 @@ func (w *WinTray) showMenu(hwnd win.HWND, hmenu win.HMENU, pt *win.POINT) uint32
 	// Set the foreground window
 	win.SetForegroundWindow(hwnd)
 
-	// Obtain the HWND of the shell desktop
-	shellHwnd, _, _ := pGetShellWindow.Call()
-
-	// Calculate the correct scaling factor
-	scale := float32(win.GetDpiForWindow(
-		win.HWND(shellHwnd),
-	)) / 96
-
-	// Avoid a division-by-zero error
-	if scale == 0 {
-		scale = 1
-	}
-
-	// Set the correct alignment
+	// Get the correct alignment
 	var extraFlags uint32
 	if win.GetSystemMetrics(win.SM_MENUDROPALIGNMENT) == 0 {
 		extraFlags = win.TPM_LEFTALIGN
@@ -208,8 +194,8 @@ func (w *WinTray) showMenu(hwnd win.HWND, hmenu win.HMENU, pt *win.POINT) uint32
 	return win.TrackPopupMenu(
 		hmenu,
 		win.TPM_RETURNCMD|extraFlags,
-		int32(float32(pt.X)/scale),
-		int32(float32(pt.Y)/scale),
+		pt.X,
+		pt.Y,
 		0,
 		hwnd,
 		nil,
@@ -257,18 +243,19 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 
 		// The context menu was activated
 		case pWMAPP_NOTIFYCALLBACK:
-			if win.LOWORD(uint32(lparam)) == win.WM_CONTEXTMENU {
-				id := w.showMenu(
-					hwnd,
-					hmenu,
-					&win.POINT{
-						X: win.GET_X_LPARAM(wparam),
-						Y: win.GET_Y_LPARAM(wparam),
-					},
-				)
+			if win.LOWORD(uint32(lparam)) == win.WM_RBUTTONUP {
+
+				// Get the cursor position
+				pt := win.POINT{}
+				win.GetCursorPos(&pt)
+
+				// Show the menu at that position and invoke the callback for
+				// the item that is selected
+				id := w.showMenu(hwnd, hmenu, &pt)
 				if fn, ok := menuFns[id]; ok {
 					go fn()
 				}
+
 				return 0
 			}
 
