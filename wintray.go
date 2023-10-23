@@ -96,6 +96,13 @@ func (w *WinTray) createTrayIcon(hwnd win.HWND, iconId uint32) {
 	})
 }
 
+func (w *WinTray) destroyTrayIcon(hwnd win.HWND, iconId uint32) {
+	win.Shell_NotifyIcon(win.NIM_DELETE, &win.NOTIFYICONDATA{
+		HWnd: hwnd,
+		UID:  iconId,
+	})
+}
+
 func (w *WinTray) setVersion(hwnd win.HWND, iconId uint32) {
 	win.Shell_NotifyIcon(win.NIM_SETVERSION, &win.NOTIFYICONDATA{
 		HWnd:     hwnd,
@@ -241,6 +248,11 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 		case win.WM_CREATE:
 			w.createTrayIcon(hwnd, iconId)
 			w.setVersion(hwnd, iconId)
+			return 0
+
+		// Destroy the icon during shutdown
+		case win.WM_QUIT:
+			w.destroyTrayIcon(hwnd, iconId)
 			return 0
 
 		// The context menu was activated
