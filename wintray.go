@@ -15,6 +15,8 @@ import (
 )
 
 const (
+	DPI_AWARENESS_CONTEXT_SYSTEM_AWARE = ^uintptr(1)
+
 	pWMAPP_NOTIFYCALLBACK = iota + win.WM_APP + 1
 	pWMAPP_MESSAGE
 
@@ -27,9 +29,17 @@ const (
 var (
 	newIconId = atomic.Uint32{}
 
-	user32       = windows.MustLoadDLL("User32.dll")
-	pAppendMenuW = user32.MustFindProc("AppendMenuW")
+	user32                        = windows.MustLoadDLL("User32.dll")
+	pAppendMenuW                  = user32.MustFindProc("AppendMenuW")
+	pSetThreadDpiAwarenessContext *windows.Proc
 )
+
+func init() {
+	p, _ := user32.FindProc("SetThreadDpiAwarenessContext")
+	if p != nil {
+		pSetThreadDpiAwarenessContext = p
+	}
+}
 
 type pMessage struct {
 	Type int
@@ -210,6 +220,13 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 	// Lock this goroutine to an OS thread until termination
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	// If we are running on Windows 10, set the thread DPI awareness
+	if pSetThreadDpiAwarenessContext != nil {
+		pSetThreadDpiAwarenessContext.Call(
+			uintptr(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE),
+		)
+	}
 
 	// Generate a unique ID for this particular tray icon and create an empty
 	// context menu
