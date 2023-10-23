@@ -1,5 +1,8 @@
 ## go-wintray
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/nathan-osman/go-wintray.svg)](https://pkg.go.dev/github.com/nathan-osman/go-wintray)
+[![MIT License](https://img.shields.io/badge/license-MIT-9370d8.svg?style=flat)](https://opensource.org/licenses/MIT)
+
 A simple package for creating an icon in the system tray and displaying notifications.
 
 ### Usage
