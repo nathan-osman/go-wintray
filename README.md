@@ -38,3 +38,9 @@ w.AddMenuItem("&Print Message", func() {
 > Note that the provided function will run on a different goroutine than the caller.
 
 ![Screenshot of example code running in the system tray](https://github.com/nathan-osman/go-wintray/blob/main/img/wintray-screenshot.png?raw=true)
+
+Notifications can be displayed as well:
+
+```golang
+w.ShowNotification("This is a test.", "Title")
+```
