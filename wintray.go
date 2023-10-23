@@ -2,6 +2,7 @@ package wintray
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"reflect"
@@ -61,6 +62,7 @@ type pDataShowNotification struct {
 type WinTray struct {
 	hwnd        win.HWND
 	messageChan chan *pMessage
+	returnChan  chan error
 	closedChan  chan any
 }
 
@@ -94,8 +96,6 @@ func copyToUint16Buffer(buff any, text string) {
 	}
 }
 
-// TODO: use a second channel to send error value back to caller
-
 func (w *WinTray) createTrayIcon(hwnd win.HWND, iconId uint32) {
 	win.Shell_NotifyIcon(win.NIM_ADD, &win.NOTIFYICONDATA{
 		HWnd:             hwnd,
@@ -120,12 +120,12 @@ func (w *WinTray) setVersion(hwnd win.HWND, iconId uint32) {
 	})
 }
 
-func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) {
+func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) error {
 
 	// Create a temporary file with the image contents
 	f, err := os.CreateTemp("", "*.ico")
 	if err != nil {
-		return
+		return err
 	}
 	defer func() {
 		os.Remove(f.Name())
@@ -142,6 +142,9 @@ func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) {
 		0,
 		win.LR_DEFAULTSIZE|win.LR_LOADFROMFILE,
 	)
+	if h == 0 {
+		return errors.New("unable to load icon")
+	}
 
 	hicon := win.HICON(h)
 
@@ -152,10 +155,14 @@ func (w *WinTray) setIcon(hwnd win.HWND, iconId uint32, b []byte) {
 		UFlags: win.NIF_ICON,
 		HIcon:  hicon,
 	}
-	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
+	if !win.Shell_NotifyIcon(win.NIM_MODIFY, nid) {
+		return errors.New("unable to change icon")
+	}
+
+	return nil
 }
 
-func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) {
+func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) error {
 	nid := &win.NOTIFYICONDATA{
 		CbSize: uint32(unsafe.Sizeof(win.NOTIFYICONDATA{})),
 		HWnd:   hwnd,
@@ -163,19 +170,25 @@ func (w *WinTray) setTip(hwnd win.HWND, iconId uint32, text string) {
 		UFlags: win.NIF_TIP | win.NIF_SHOWTIP,
 	}
 	copyToUint16Buffer(&nid.SzTip, text)
-	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
+	if !win.Shell_NotifyIcon(win.NIM_MODIFY, nid) {
+		return errors.New("unable to change tooltip")
+	}
+	return nil
 }
 
-func (w *WinTray) addMenuItem(hmenu win.HMENU, id uint32, text string) {
-	pAppendMenuW.Call(
+func (w *WinTray) addMenuItem(hmenu win.HMENU, id uint32, text string) error {
+	if ret, _, err := pAppendMenuW.Call(
 		uintptr(hmenu),
 		0,
 		uintptr(id),
 		uintptr(unsafe.Pointer(mustUTF16PtrFromString(text))),
-	)
+	); ret == 0 {
+		return err
+	}
+	return nil
 }
 
-func (w *WinTray) showNotification(hwnd win.HWND, iconId uint32, info, infoTitle string) {
+func (w *WinTray) showNotification(hwnd win.HWND, iconId uint32, info, infoTitle string) error {
 	nid := &win.NOTIFYICONDATA{
 		CbSize: uint32(unsafe.Sizeof(win.NOTIFYICONDATA{})),
 		HWnd:   hwnd,
@@ -184,7 +197,10 @@ func (w *WinTray) showNotification(hwnd win.HWND, iconId uint32, info, infoTitle
 	}
 	copyToUint16Buffer(&nid.SzInfo, info)
 	copyToUint16Buffer(&nid.SzInfoTitle, infoTitle)
-	win.Shell_NotifyIcon(win.NIM_MODIFY, nid)
+	if !win.Shell_NotifyIcon(win.NIM_MODIFY, nid) {
+		return errors.New("unable to display notification")
+	}
+	return nil
 }
 
 func (w *WinTray) showMenu(hwnd win.HWND, hmenu win.HMENU, pt *win.POINT) uint32 {
@@ -281,19 +297,19 @@ func (w *WinTray) run(hwndChan chan<- win.HWND) {
 			m := <-w.messageChan
 			switch m.Type {
 			case pMESSAGE_SET_ICON_FROM_BYTES:
-				w.setIcon(hwnd, iconId, m.Data.([]byte))
+				w.returnChan <- w.setIcon(hwnd, iconId, m.Data.([]byte))
 			case pMESSAGE_SET_TIP:
-				w.setTip(hwnd, iconId, m.Data.(string))
+				w.returnChan <- w.setTip(hwnd, iconId, m.Data.(string))
 			case pMESSAGE_ADD_MENU_ITEM:
 				var (
 					d  = m.Data.(*pDataAddMenuItem)
 					id = newMenuId()
 				)
 				menuFns[id] = d.Fn
-				w.addMenuItem(hmenu, id, d.Text)
+				w.returnChan <- w.addMenuItem(hmenu, id, d.Text)
 			case pMESSAGE_SHOW_NOTIFICATION:
 				d := m.Data.(*pDataShowNotification)
-				w.showNotification(hwnd, iconId, d.Info, d.InfoTitle)
+				w.returnChan <- w.showNotification(hwnd, iconId, d.Info, d.InfoTitle)
 			}
 			return 0
 		}
@@ -344,6 +360,7 @@ func New() *WinTray {
 	var (
 		w = &WinTray{
 			messageChan: make(chan *pMessage),
+			returnChan:  make(chan error),
 			closedChan:  make(chan any),
 		}
 		hwndChan = make(chan win.HWND)
@@ -354,26 +371,28 @@ func New() *WinTray {
 }
 
 // SetIconFromBytes reads an ICO file from a byte array.
-func (w *WinTray) SetIconFromBytes(b []byte) {
+func (w *WinTray) SetIconFromBytes(b []byte) error {
 	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
 	w.messageChan <- &pMessage{
 		Type: pMESSAGE_SET_ICON_FROM_BYTES,
 		Data: b,
 	}
+	return <-w.returnChan
 }
 
 // SetTip sets the tooltip for the icon.
-func (w *WinTray) SetTip(text string) {
+func (w *WinTray) SetTip(text string) error {
 	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
 	w.messageChan <- &pMessage{
 		Type: pMESSAGE_SET_TIP,
 		Data: text,
 	}
+	return <-w.returnChan
 }
 
 // AddMenuItem adds an item to the menu that will invoke the provided function
 // when selected.
-func (w *WinTray) AddMenuItem(text string, fn func()) {
+func (w *WinTray) AddMenuItem(text string, fn func()) error {
 	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
 	w.messageChan <- &pMessage{
 		Type: pMESSAGE_ADD_MENU_ITEM,
@@ -382,11 +401,12 @@ func (w *WinTray) AddMenuItem(text string, fn func()) {
 			Fn:   fn,
 		},
 	}
+	return <-w.returnChan
 }
 
 // ShowNotification displays a balloon notification with the provided message
 // and title.
-func (w *WinTray) ShowNotification(info, infoTitle string) {
+func (w *WinTray) ShowNotification(info, infoTitle string) error {
 	win.PostMessage(w.hwnd, pWMAPP_MESSAGE, 0, 0)
 	w.messageChan <- &pMessage{
 		Type: pMESSAGE_SHOW_NOTIFICATION,
@@ -395,6 +415,7 @@ func (w *WinTray) ShowNotification(info, infoTitle string) {
 			InfoTitle: infoTitle,
 		},
 	}
+	return <-w.returnChan
 }
 
 // Close removes the icon and shuts down the event loop.
